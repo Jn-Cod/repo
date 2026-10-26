@@ -93,7 +93,8 @@
   #vrToast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
   body.vr-mode #ui, body.vr-mode #theme, body.vr-mode #prog, body.vr-mode #phrases,
   body.vr-mode #doorMsg, body.vr-mode #btnHint, body.vr-mode #hint,
-  body.vr-mode #btnVRGame, body.vr-mode #vrToast{ display:none !important; }
+  body.vr-mode #btnVRGame, body.vr-mode #vrToast, body.vr-mode #hudLlave,
+  body.vr-mode #avisoLlave, body.vr-mode #pantallasVideo{ display:none !important; }
 
   /* ===== CAMINO DE DESAFÍOS (abierto, sin contenedores) ===== */
   #hubTitle{ margin-top:6px; font-size:clamp(2rem,5vw,2.8rem); z-index:2; position:relative;
@@ -418,6 +419,7 @@ let vrListo = false;
 let vrEntrando = false;
 let vrEstadoGuardado = null;
 let vrToastTimer = null;
+window.__frameHooks = [];
 
 function stickVR(src){
   if(!src || !src.gamepad || !src.gamepad.axes) return [0, 0];
@@ -1997,6 +1999,13 @@ if(d < 18 && p.cerrada && window.__frag && !window.__frag.listo(zonaIdx)) msgPue
 
   actualizarFuegos(dt);
 
+  if(window.__frameHooks){
+    for(const hook of window.__frameHooks){
+      try{ hook(dt); }
+      catch(e){ if(window.console) console.warn('frame hook:', e && e.message); }
+    }
+  }
+
   if(enVR){
     vrHud.visible = true;
     const zona = ZONAS[zonaIdx] ? ZONAS[zonaIdx].nombre : '';
@@ -2008,7 +2017,9 @@ if(d < 18 && p.cerrada && window.__frag && !window.__frag.listo(zonaIdx)) msgPue
     }
     const linea1 = llave ? zona + '  ·  ' + llave : zona;
     let linea2 = 'Stick izq: mover · Stick der: girar · Gatillo: puerta · Grip der: subir · Grip izq: bajar';
-    if(msgPuerta){
+    if(window.__fragAviso && window.__fragAviso.hasta > performance.now()){
+      linea2 = window.__fragAviso.texto.replace(/presiona E/gi, 'usa el gatillo');
+    } else if(msgPuerta){
       if(msgPuerta.indexOf('fragmentos') !== -1) linea2 = 'Puerta sellada: busca los fragmentos de la llave';
       else if(msgPuerta.indexOf('Presiona E') !== -1) linea2 = 'Gatillo: abrir la puerta';
       else if(msgPuerta.indexOf('abierta') !== -1) linea2 = 'Puerta abierta: atraviesa';
@@ -2147,18 +2158,15 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
         '&controls=0&rel=0&playsinline=1&disablekb=1&iv_load_policy=3&fs=0&modestbranding=1';
     }
     const iframesCargados = {};
-    let ultimaZona = -1;
     let vrOculto = false;
     let w = innerWidth, h = innerHeight;
     window.addEventListener('resize', () => { w = innerWidth; h = innerHeight; });
     function bucle(){
-      requestAnimationFrame(bucle);
       if(!vid.camera) return;
       const enVR = vid.isVR && vid.isVR();
       if(enVR){
         if(!vrOculto){
           vrOculto = true;
-          ultimaZona = -2;
           for(let i=0;i<9;i++){
             if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
             cartas[i].style.display = 'none';
@@ -2169,38 +2177,46 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
       if(vrOculto) vrOculto = false;
       const cam = vid.camera;
       const k = vid.zonaIdx();
-      /* al cambiar de bioma: carga SOLO el video de la zona activa, pausa los demas */
-      if(k !== ultimaZona){
-        ultimaZona = k;
-        for(let i=0;i<9;i++){
-          if(i === k) continue;
-          if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
-        }
-        if(videos[k] !== undefined && !iframesCargados[k]){
-          frames[k].src = embedURL(videos[k], !sonidoActivo);
-          iframesCargados[k] = true;
-        }
-      }
       for(let i=0;i<9;i++){
-        if(i !== k || videos[i] === undefined){ cartas[i].style.display = 'none'; continue; }
+        const c = cartas[i];
+        if(i !== k || videos[i] === undefined){
+          c.style.display = 'none';
+          if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
+          continue;
+        }
         const z = zonasDatos[i];
         vT.copy(z.p).project(cam);
-        if(vT.z > 1 || vT.z < -1){ cartas[i].style.display = 'none'; continue; }
         /* ancho en px: proyectar el punto p y p+8m a la derecha para medir escala real */
         const f = frameAt(curva, z.u);
         rT.crossVectors(upL, f.t).normalize();
         vT2.copy(z.p).addScaledVector(rT, 8).project(cam);
         const ancho = Math.hypot(vT.x-vT2.x, vT.y-vT2.y) * w * 0.5;
+        const cw = Math.max(160, Math.min(560, ancho));
+        const ch = cw*0.5625;
         const px = (vT.x*0.5+0.5)*w;
         const py = (0.5 - vT.y*0.5)*h;
-        const c = cartas[i];
+        const delante = vT.z > -1 && vT.z < 1;
+        const intersecta = delante && px + cw*0.5 > 0 && px - cw*0.5 < w && py + ch*0.5 > 0 && py - ch*0.5 < h;
+        const centrada = delante && px > 0 && px < w && py > 0 && py < h;
+        const visible = iframesCargados[i] ? intersecta : centrada;
+        if(!visible){
+          c.style.display = 'none';
+          /* sin tarjeta a la vista no debe seguir sonando YouTube */
+          if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
+          continue;
+        }
         c.style.display = 'block';
-        c.style.width = Math.max(160, Math.min(560, ancho)) + 'px';
+        c.style.width = cw + 'px';
         c.style.transform = 'translate(' + px.toFixed(1) + 'px,' + py.toFixed(1) + 'px) translate(-50%,-50%)';
-        c.querySelector('.pmarco').style.height = (parseFloat(c.style.width)*0.5625) + 'px';
+        c.querySelector('.pmarco').style.height = ch + 'px';
+        if(!iframesCargados[i]){
+          frames[i].src = embedURL(videos[i], !sonidoActivo);
+          iframesCargados[i] = true;
+        }
       }
     }
-    bucle();
+    if(window.__frameHooks) window.__frameHooks.push(bucle);
+    else bucle();
   }catch(e){
     if(window.console) console.warn('pantallas de video:', e.message);
   }
@@ -2270,6 +2286,7 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
     function mostrarAviso(msg){
       aviso.textContent = msg;
       aviso.style.opacity = 1;
+      window.__fragAviso = { texto: msg, hasta: performance.now() + 2600 };
       clearTimeout(avisoT);
       avisoT = setTimeout(function(){ aviso.style.opacity = 0; }, 2600);
     }
@@ -2281,8 +2298,7 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
     if(hintEl) hintEl.textContent += ' · 🔑 junta los fragmentos de la llave de cada bioma';
     /* bucle propio: recoger fragmentos cuando pasas cerca */
     let ultZona = -1;
-    (function bucleFrag(){
-      requestAnimationFrame(bucleFrag);
+    function bucleFrag(){
       const k = vid.zonaIdx();
       if(k !== ultZona){
         ultZona = k;
@@ -2307,7 +2323,9 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
         if(listo(k)) mostrarAviso('🔑 ¡Llave completa! Vuelve a la puerta y presiona E');
         else mostrarAviso('✨ Fragmento de llave encontrado (' + (POR_ZONA - faltan(k)) + '/' + POR_ZONA + ')');
       }
-    })();
+    }
+    if(window.__frameHooks) window.__frameHooks.push(bucleFrag);
+    else bucleFrag();
   }catch(e){
     if(window.console) console.warn('fragmentos de llave:', e.message);
   }
