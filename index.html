@@ -48,6 +48,7 @@
     position:fixed; inset:0; z-index:9999;
     background: linear-gradient(180deg, #04060d 0%, #080d1a 45%, #0d1428 100%);
     display:flex; flex-direction:column; align-items:center; justify-content:center;
+    justify-content:safe center;
     overflow-y:auto; padding:20px 0 34px;
     transition: opacity 1.2s ease, visibility 1.2s ease;
     font-family:'Segoe UI', Verdana, sans-serif;
@@ -64,6 +65,35 @@
     10% { opacity:1; } 90% { opacity:1; }
     100% { transform: translateY(-10vh) scale(1); opacity:0; }
   }
+
+  #btnVR{ position:relative; z-index:3; margin:2px 0 8px; padding:13px 30px;
+    border-radius:999px; border:1px solid rgba(140,240,255,.55);
+    background:linear-gradient(135deg, rgba(30,110,170,.92), rgba(110,60,200,.92));
+    color:#f0fbff; font:800 15px/1 'Segoe UI', Verdana, sans-serif;
+    letter-spacing:1.2px; text-transform:uppercase; cursor:pointer;
+    box-shadow:0 10px 30px rgba(50,160,255,.28);
+    transition:transform .2s, box-shadow .2s, background .2s; }
+  #btnVR:hover{ transform:translateY(-2px); box-shadow:0 14px 36px rgba(50,160,255,.4);
+    background:linear-gradient(135deg, rgba(40,140,210,.98), rgba(130,80,230,.98)); }
+  #btnVR:active{ transform:translateY(0); }
+  #vrNote{ position:relative; z-index:2; max-width:440px; margin:0 16px 18px;
+    text-align:center; color:rgba(220,235,255,.66); font-size:.72rem; line-height:1.5;
+    letter-spacing:.2px; }
+  #btnVRGame{ position:fixed; top:22px; right:70px; z-index:10; height:38px;
+    padding:0 14px; border-radius:19px; background:rgba(20,5,40,.55);
+    border:1px solid rgba(140,240,255,.45); color:#dff7ff;
+    font:700 12px/1 'Segoe UI', Verdana, sans-serif; letter-spacing:1px;
+    cursor:pointer; backdrop-filter:blur(2px); transition:background .2s; }
+  #btnVRGame:hover{ background:rgba(140,240,255,.9); color:#06121c; }
+  #vrToast{ position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(10px);
+    z-index:10001; max-width:min(520px,88vw); padding:12px 20px; border-radius:14px;
+    background:rgba(8,12,24,.92); border:1px solid rgba(140,240,255,.35);
+    color:#eaf7ff; font:600 13px/1.45 'Segoe UI', Verdana, sans-serif; text-align:center;
+    opacity:0; pointer-events:none; transition:opacity .3s, transform .3s; }
+  #vrToast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  body.vr-mode #ui, body.vr-mode #theme, body.vr-mode #prog, body.vr-mode #phrases,
+  body.vr-mode #doorMsg, body.vr-mode #btnHint, body.vr-mode #hint,
+  body.vr-mode #btnVRGame, body.vr-mode #vrToast{ display:none !important; }
 
   /* ===== CAMINO DE DESAFÍOS (abierto, sin contenedores) ===== */
   #hubTitle{ margin-top:6px; font-size:clamp(2rem,5vw,2.8rem); z-index:2; position:relative;
@@ -208,6 +238,8 @@
   <div class="particles" id="loginParticles"></div>
   <div id="hubTitle">🔐</div>
   <div id="hubSub">Supera las 4 pruebas para desbloquear el acceso</div>
+  <button id="btnVR" type="button">Entrar en 360 VR</button>
+  <div id="vrNote">Acceso directo (omite las 4 pruebas). Requiere Meta Quest 3/3S, navegador compatible con WebXR y HTTPS.</div>
   <div id="pathRow">
     <div class="pnode active" id="pn0"><span class="pnnum">1</span><span class="pname">Astro Voxel</span><span class="pstat" id="pnst0">▶</span></div>
     <div class="pline" id="pl0"></div>
@@ -235,11 +267,13 @@
 <div id="theme">🎈 Bosque de Cartas</div>
 <div id="prog"><div id="progFill"></div></div>
 <button id="btnHint" title="Ver instrucciones"></button>
+<button id="btnVRGame" type="button" title="Entrar en 360 VR">VR</button>
 <div id="hint">Muévete libre<br>WASD moverte · ratón mirar · Shift correr<br>E abrir puertas · Espacio subir · C bajar · P pausa · Clic = fuegos 💥<br>🔑 junta los fragmentos de la llave de cada bioma</div>
 <div id="phrases"></div>
 <div id="doorMsg"></div>
 <div id="err"></div>
 <div id="fade"></div>
+<div id="vrToast"></div>
 <script>
   (function(){
     const b = document.getElementById('btnHint');
@@ -371,6 +405,217 @@ renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
+
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+renderer.xr.setFramebufferScaleFactor(0.85);
+const jugador = new THREE.Group();
+scene.add(jugador);
+jugador.add(camera);
+
+let snapListo = true;
+let vrListo = false;
+let vrEntrando = false;
+let vrEstadoGuardado = null;
+let vrToastTimer = null;
+
+function stickVR(src){
+  if(!src || !src.gamepad || !src.gamepad.axes) return [0, 0];
+  const a = src.gamepad.axes;
+  let x = a.length >= 4 ? (a[2] || 0) : (a[0] || 0);
+  let y = a.length >= 4 ? (a[3] || 0) : (a[1] || 0);
+  if(Math.abs(x) < 0.12) x = 0;
+  if(Math.abs(y) < 0.12) y = 0;
+  return [x, y];
+}
+
+function botonVR(src, i){
+  return !!(src && src.gamepad && src.gamepad.buttons && src.gamepad.buttons[i] && src.gamepad.buttons[i].pressed);
+}
+
+function mostrarToastVR(msg){
+  const t = document.getElementById('vrToast');
+  if(!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(vrToastTimer);
+  vrToastTimer = setTimeout(function(){ t.classList.remove('show'); }, 4600);
+}
+
+function mensajeErrorVR(e){
+  if(!window.isSecureContext) return 'WebXR necesita HTTPS (o localhost). Abre la página desde un servidor seguro.';
+  const n = e && e.name ? e.name : '';
+  if(n === 'NotAllowedError') return 'Permiso de VR denegado. Acepta la solicitud del navegador y vuelve a intentarlo.';
+  if(n === 'NotSupportedError') return 'Este navegador o dispositivo no soporta VR inmersivo. Usa el navegador de Meta Quest 3/3S.';
+  if(n === 'SecurityError') return 'El navegador bloqueó WebXR. Revisa los permisos y usa HTTPS.';
+  return 'No se pudo iniciar el modo VR' + (e && e.message ? ': ' + e.message : '.');
+}
+
+function activarModoVR(on){
+  if(on){
+    if(!vrEstadoGuardado){
+      const luces = [];
+      if(gruposZona[5]) gruposZona[5].traverse(function(o){ if(o.isPointLight) luces.push(o); });
+      const apagadas = [];
+      luces.forEach(function(l, i){ if(i % 20 !== 0 && l.visible){ l.visible = false; apagadas.push(l); } });
+      vrEstadoGuardado = { sombras: renderer.shadowMap.enabled, sombraSol: sol.castShadow, luces: apagadas };
+    }
+    renderer.shadowMap.enabled = false;
+    sol.castShadow = false;
+  } else if(vrEstadoGuardado){
+    renderer.shadowMap.enabled = vrEstadoGuardado.sombras;
+    sol.castShadow = vrEstadoGuardado.sombraSol;
+    vrEstadoGuardado.luces.forEach(function(l){ l.visible = true; });
+    vrEstadoGuardado = null;
+  }
+}
+
+function rectRedondeado(c, x, y, w, h, r){
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+const vrHudCanvas = document.createElement('canvas');
+vrHudCanvas.width = 1024;
+vrHudCanvas.height = 256;
+const vrHudCtx = vrHudCanvas.getContext('2d');
+const vrHudTex = new THREE.CanvasTexture(vrHudCanvas);
+vrHudTex.minFilter = THREE.LinearFilter;
+vrHudTex.magFilter = THREE.LinearFilter;
+const vrHud = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.9, 0.225),
+  new THREE.MeshBasicMaterial({ map: vrHudTex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false })
+);
+vrHud.position.set(0, -0.31, -1.1);
+vrHud.renderOrder = 999;
+vrHud.visible = false;
+camera.add(vrHud);
+let vrHudClave = '';
+
+function dibujarHudVR(linea1, linea2){
+  const clave = linea1 + '|' + linea2;
+  if(clave === vrHudClave) return;
+  vrHudClave = clave;
+  const c = vrHudCtx;
+  c.clearRect(0, 0, 1024, 256);
+  c.fillStyle = 'rgba(8,6,20,0.72)';
+  rectRedondeado(c, 18, 18, 988, 220, 42);
+  c.fill();
+  c.strokeStyle = 'rgba(255,209,102,0.45)';
+  c.lineWidth = 3;
+  c.stroke();
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillStyle = '#fff3e0';
+  c.font = '700 38px "Segoe UI", system-ui, sans-serif';
+  c.fillText(linea1, 512, 82, 930);
+  c.fillStyle = 'rgba(255,235,210,0.82)';
+  c.font = '500 25px "Segoe UI", system-ui, sans-serif';
+  c.fillText(linea2, 512, 174, 930);
+  vrHudTex.needsUpdate = true;
+}
+
+const vrFade = new THREE.Mesh(
+  new THREE.SphereGeometry(0.5, 16, 12),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false, toneMapped: false })
+);
+vrFade.renderOrder = 1000;
+vrFade.visible = false;
+camera.add(vrFade);
+
+const vrControles = [renderer.xr.getController(0), renderer.xr.getController(1)];
+for(let i = 0; i < vrControles.length; i++){
+  const control = vrControles[i];
+  const rayoGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
+  const rayo = new THREE.Line(rayoGeo, new THREE.LineBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.35, depthWrite: false }));
+  rayo.scale.z = 4;
+  rayo.visible = false;
+  control.add(rayo);
+  control.addEventListener('connected', function(){ rayo.visible = true; });
+  control.addEventListener('disconnected', function(){ rayo.visible = false; });
+  control.addEventListener('selectstart', function(){ if(renderer.xr.isPresenting) abrirPuertaCercana(); });
+  jugador.add(control);
+}
+
+function ocultarRayosVR(){
+  for(const control of vrControles){
+    for(const hijo of control.children){
+      if(hijo.isLine) hijo.visible = false;
+    }
+  }
+}
+
+function alEntrarVR(){
+  document.body.classList.add('vr-mode');
+  vrListo = false;
+  snapListo = true;
+  jugador.rotation.set(0, 0, 0);
+  jugador.position.copy(posJugador);
+  vrHud.visible = true;
+  activarModoVR(true);
+  const ov = document.getElementById('loginOverlay');
+  if(ov) ov.classList.add('fade-out');
+}
+
+function alSalirVR(){
+  document.body.classList.remove('vr-mode');
+  vrHud.visible = false;
+  vrFade.visible = false;
+  ocultarRayosVR();
+  activarModoVR(false);
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  if(dir.lengthSq() > 0.000001){
+    yaw = Math.atan2(-dir.x, -dir.z);
+    pitch = Math.max(-1.2, Math.min(1.2, Math.asin(Math.max(-1, Math.min(1, dir.y)))));
+    anguloEsperado.yaw = yaw;
+    anguloEsperado.pitch = pitch;
+  }
+  jugador.position.set(0, 0, 0);
+  jugador.rotation.set(0, 0, 0);
+  camera.position.set(posJugador.x, posJugador.y + 1.8, posJugador.z);
+  camera.updateProjectionMatrix();
+  vrListo = false;
+  mostrarToastVR('Modo VR finalizado. Sigues en 2D.');
+}
+
+renderer.xr.addEventListener('sessionstart', alEntrarVR);
+renderer.xr.addEventListener('sessionend', alSalirVR);
+
+async function entrarVR(){
+  if(vrEntrando || renderer.xr.isPresenting) return;
+  if(!navigator.xr){
+    mostrarToastVR('WebXR no está disponible. Abre esta página en el navegador de Meta Quest 3/3S con HTTPS.');
+    return;
+  }
+  vrEntrando = true;
+  let sesion = null;
+  try{
+    sesion = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+    });
+    if(window.__flushGame && !window.__gameReady) window.__flushGame();
+    await renderer.xr.setSession(sesion);
+    const ov = document.getElementById('loginOverlay');
+    if(ov) ov.classList.add('fade-out');
+  }catch(e){
+    if(sesion){ try{ await sesion.end(); }catch(_e){} }
+    mostrarToastVR(mensajeErrorVR(e));
+  }finally{
+    vrEntrando = false;
+  }
+}
+
+const btnVR = document.getElementById('btnVR');
+if(btnVR) btnVR.addEventListener('click', entrarVR);
+const btnVRGame = document.getElementById('btnVRGame');
+if(btnVRGame) btnVRGame.addEventListener('click', entrarVR);
+
 const clock = new THREE.Clock();
 
 /* ================= LUZ ================= */
@@ -1571,30 +1816,63 @@ try {
 
 /* ================= BUCLE ================= */
 function animate(){
-  requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
+  const enVR = renderer.xr.isPresenting;
 
   /* --- mover al jugador libremente sobre el terreno --- */
   if(!pausa){
     yaw += (anguloEsperado.yaw - yaw) * Math.min(1, dt*8);
     pitch += (anguloEsperado.pitch - pitch) * Math.min(1, dt*8);
-    const adelante = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    const lado = new THREE.Vector3(-adelante.z, 0, adelante.x);
-    const vel = turbo ? 34 : 20;
-    if(teclas['w'] || teclas['arrowup'])   posJugador.addScaledVector(adelante, vel*dt);
-    if(teclas['s'] || teclas['arrowdown']) posJugador.addScaledVector(adelante, -vel*dt);
-    if(teclas['d']) posJugador.addScaledVector(lado, vel*dt);
-    if(teclas['a']) posJugador.addScaledVector(lado, -vel*dt);
+    let vrSubiendo = false, vrBajando = false;
+    if(enVR){
+      const ses = renderer.xr.getSession();
+      let mandoIzq = null, mandoDer = null;
+      if(ses && ses.inputSources){
+        for(const src of ses.inputSources){
+          if(src.handedness === 'left') mandoIzq = src;
+          else if(src.handedness === 'right') mandoDer = src;
+        }
+      }
+      const [jx, jy] = stickVR(mandoIzq);
+      const [rx] = stickVR(mandoDer);
+      const mirar = new THREE.Vector3();
+      camera.getWorldDirection(mirar);
+      mirar.y = 0;
+      if(mirar.lengthSq() < 0.0001) mirar.set(0, 0, -1).applyAxisAngle(UP, jugador.rotation.y);
+      mirar.normalize();
+      const derecha = new THREE.Vector3().crossVectors(mirar, UP).normalize();
+      const mover = new THREE.Vector3().addScaledVector(mirar, -jy).addScaledVector(derecha, jx);
+      if(mover.lengthSq() > 1) mover.normalize();
+      posJugador.addScaledVector(mover, 8*dt);
+      if(snapListo && Math.abs(rx) > 0.72){
+        jugador.rotation.y -= Math.sign(rx) * Math.PI/6;
+        snapListo = false;
+      }
+      if(Math.abs(rx) < 0.32) snapListo = true;
+      vrSubiendo = botonVR(mandoDer, 1);
+      vrBajando = botonVR(mandoIzq, 1);
+      if(vrSubiendo) posJugador.y += 8*dt;
+      if(vrBajando) posJugador.y -= 8*dt;
+    } else {
+      const adelante = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+      const lado = new THREE.Vector3(-adelante.z, 0, adelante.x);
+      const vel = turbo ? 34 : 20;
+      if(teclas['w'] || teclas['arrowup'])   posJugador.addScaledVector(adelante, vel*dt);
+      if(teclas['s'] || teclas['arrowdown']) posJugador.addScaledVector(adelante, -vel*dt);
+      if(teclas['d']) posJugador.addScaledVector(lado, vel*dt);
+      if(teclas['a']) posJugador.addScaledVector(lado, -vel*dt);
+      if(teclas[' '])  posJugador.y += 20*dt;
+      if(teclas['c'])  posJugador.y -= 20*dt;
+      vrSubiendo = !!teclas[' '];
+      vrBajando = !!teclas['c'];
+      if(bajarASuelo){ posJugador.y = alturaTerreno(posJugador.x, posJugador.z) + 2; bajarASuelo = false; }
+    }
     const suelo = alturaTerreno(posJugador.x, posJugador.z);
-if(teclas[' '])  posJugador.y += 20*dt;     /* subir */
-    if(teclas['c'])  posJugador.y -= 20*dt;     /* bajar */
-    if(bajarASuelo){ posJugador.y = suelo + 2; bajarASuelo = false; }  /* doble toque: caer */
-    /* gravedad suave: sin mantener espacio ni C, desciendes solo hasta aterrizar */
-    if(!teclas[' '] && !teclas['c'] && posJugador.y > suelo + 2.1){
+    if(!vrSubiendo && !vrBajando && posJugador.y > suelo + 2.1){
       posJugador.y += (suelo + 2 - posJugador.y) * Math.min(1, dt*2.5);
     }
-    if(posJugador.y < suelo + 1.6) posJugador.y = suelo + 1.6;  /* no atravesar el piso */
+    if(posJugador.y < suelo + 1.6) posJugador.y = suelo + 1.6;
     posJugador.x = Math.max(-740, Math.min(740, posJugador.x));
     posJugador.z = Math.max(-740, Math.min(740, posJugador.z));
   }
@@ -1647,13 +1925,27 @@ if(d < 18 && p.cerrada && window.__frag && !window.__frag.listo(zonaIdx)) msgPue
   actualizarTransicion(dt);
 
   /* cámara en primera persona */
-  camera.position.set(posJugador.x, posJugador.y + 1.8, posJugador.z);
-  const cp = Math.cos(pitch), spx = Math.sin(pitch);
-  camera.lookAt(
-    posJugador.x - Math.sin(yaw)*cp,
-    posJugador.y + 1.8 + spx,
-    posJugador.z - Math.cos(yaw)*cp
-  );
+  if(enVR){
+    jugador.position.copy(posJugador);
+    if(!vrListo){
+      renderer.xr.getCamera(camera);
+      const dirVisor = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      const yawVisor = Math.atan2(-dirVisor.x, -dirVisor.z);
+      jugador.rotation.y = yaw - yawVisor;
+      vrListo = true;
+    }
+  } else {
+    jugador.position.set(0, 0, 0);
+    jugador.rotation.set(0, 0, 0);
+    camera.position.set(posJugador.x, posJugador.y + 1.8, posJugador.z);
+    const cp = Math.cos(pitch), spx = Math.sin(pitch);
+    camera.lookAt(
+      posJugador.x - Math.sin(yaw)*cp,
+      posJugador.y + 1.8 + spx,
+      posJugador.z - Math.cos(yaw)*cp
+    );
+  }
+  cieloMesh.position.set(posJugador.x, posJugador.y + 1.8, posJugador.z);
 
   /* el sol acompaña al jugador: ilumina el piso adelante como luz natural */
   faroLuz.position.set(posJugador.x + 15, posJugador.y + 60, posJugador.z + 15);
@@ -1705,9 +1997,34 @@ if(d < 18 && p.cerrada && window.__frag && !window.__frag.listo(zonaIdx)) msgPue
 
   actualizarFuegos(dt);
 
-  if(composer) composer.render(); else renderer.render(scene, camera);
+  if(enVR){
+    vrHud.visible = true;
+    const zona = ZONAS[zonaIdx] ? ZONAS[zonaIdx].nombre : '';
+    let llave = '';
+    if(window.__frag){
+      const total = window.__frag.total(zonaIdx);
+      const faltan = window.__frag.faltan(zonaIdx);
+      llave = 'Llave ' + (total - faltan) + '/' + total;
+    }
+    const linea1 = llave ? zona + '  ·  ' + llave : zona;
+    let linea2 = 'Stick izq: mover · Stick der: girar · Gatillo: puerta · Grip der: subir · Grip izq: bajar';
+    if(msgPuerta){
+      if(msgPuerta.indexOf('fragmentos') !== -1) linea2 = 'Puerta sellada: busca los fragmentos de la llave';
+      else if(msgPuerta.indexOf('Presiona E') !== -1) linea2 = 'Gatillo: abrir la puerta';
+      else if(msgPuerta.indexOf('abierta') !== -1) linea2 = 'Puerta abierta: atraviesa';
+    }
+    dibujarHudVR(linea1, linea2);
+    const op = parseFloat(elFade.style.opacity || '0') || 0;
+    vrFade.material.opacity = op;
+    vrFade.visible = op > 0.001;
+  } else {
+    vrHud.visible = false;
+    vrFade.visible = false;
+  }
+
+  if(composer && !enVR) composer.render(); else renderer.render(scene, camera);
 }
-animate();
+renderer.setAnimationLoop(animate);
 
 /* gancho de depuración para pruebas */
 window.__test = {
@@ -1740,12 +2057,14 @@ estrellasZ3(){
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-  if(composer) composer.setSize(innerWidth, innerHeight);
+  if(!renderer.xr.isPresenting){
+    renderer.setSize(innerWidth, innerHeight);
+    if(composer) composer.setSize(innerWidth, innerHeight);
+  }
 });
 
 /* exponer lo minimo que usan las pantallas de video y los fragmentos de llave (agregado, no altera el juego) */
-window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zonaIdx, frameAt: frameAt, posJugador: posJugador, gruposZona: gruposZona, alturaTerreno: alturaTerreno };
+window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zonaIdx, frameAt: frameAt, posJugador: posJugador, gruposZona: gruposZona, alturaTerreno: alturaTerreno, isVR: () => renderer.xr.isPresenting };
 
 } catch(err){
   document.getElementById('err').style.display = 'block';
@@ -1829,11 +2148,25 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
     }
     const iframesCargados = {};
     let ultimaZona = -1;
+    let vrOculto = false;
     let w = innerWidth, h = innerHeight;
     window.addEventListener('resize', () => { w = innerWidth; h = innerHeight; });
     function bucle(){
       requestAnimationFrame(bucle);
       if(!vid.camera) return;
+      const enVR = vid.isVR && vid.isVR();
+      if(enVR){
+        if(!vrOculto){
+          vrOculto = true;
+          ultimaZona = -2;
+          for(let i=0;i<9;i++){
+            if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
+            cartas[i].style.display = 'none';
+          }
+        }
+        return;
+      }
+      if(vrOculto) vrOculto = false;
       const cam = vid.camera;
       const k = vid.zonaIdx();
       /* al cambiar de bioma: carga SOLO el video de la zona activa, pausa los demas */
