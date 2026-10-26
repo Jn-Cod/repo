@@ -94,7 +94,8 @@
   body.vr-mode #ui, body.vr-mode #theme, body.vr-mode #prog, body.vr-mode #phrases,
   body.vr-mode #doorMsg, body.vr-mode #btnHint, body.vr-mode #hint,
   body.vr-mode #btnVRGame, body.vr-mode #vrToast, body.vr-mode #hudLlave,
-  body.vr-mode #avisoLlave, body.vr-mode #pantallasVideo{ display:none !important; }
+  body.vr-mode #avisoLlave{ display:none !important; }
+  body.vr-mode #pantallasVideo{ opacity:0 !important; pointer-events:none !important; }
 
   /* ===== CAMINO DE DESAFÍOS (abierto, sin contenedores) ===== */
   #hubTitle{ margin-top:6px; font-size:clamp(2rem,5vw,2.8rem); z-index:2; position:relative;
@@ -2128,12 +2129,12 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
     }
     const frames = cartas.map(c => c.querySelector('iframe'));
     let sonidoActivo = false;
-    /* los navegadores bloquean el sonido autoplay: el primer clic/tecla del jugador lo activa */
+    /* el primer clic/tecla del jugador reafirma el audio si el navegador bloquea el autoplay */
     function activarSonido(){
       if(sonidoActivo) return;
       sonidoActivo = true;
       const k = vid.zonaIdx();
-      if(iframesCargados[k]) frames[k].src = embedURL(videos[k], false);
+      if(iframesCargados[k]) frames[k].src = embedURL(videos[k]);
     }
     window.addEventListener('click', activarSonido, { capture:true });
     window.addEventListener('keydown', activarSonido, { capture:true });
@@ -2151,30 +2152,18 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
       pT.y = f.p.y - 6;
       zonasDatos.push({ p: pT.clone(), u: uM });
     }
-    function embedURL(id, muto){
+    function embedURL(id){
       return 'https://www.youtube.com/embed/' + id +
-        '?autoplay=1&mute=' + (muto?'1':'0') +
+        '?autoplay=1&mute=0' +
         '&loop=1&playlist=' + id +
         '&controls=0&rel=0&playsinline=1&disablekb=1&iv_load_policy=3&fs=0&modestbranding=1';
     }
     const iframesCargados = {};
-    let vrOculto = false;
     let w = innerWidth, h = innerHeight;
     window.addEventListener('resize', () => { w = innerWidth; h = innerHeight; });
     function bucle(){
       if(!vid.camera) return;
       const enVR = vid.isVR && vid.isVR();
-      if(enVR){
-        if(!vrOculto){
-          vrOculto = true;
-          for(let i=0;i<9;i++){
-            if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
-            cartas[i].style.display = 'none';
-          }
-        }
-        return;
-      }
-      if(vrOculto) vrOculto = false;
       const cam = vid.camera;
       const k = vid.zonaIdx();
       for(let i=0;i<9;i++){
@@ -2182,6 +2171,16 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
         if(i !== k || videos[i] === undefined){
           c.style.display = 'none';
           if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
+          continue;
+        }
+        /* el video de la zona activa se carga siempre: el audio no se corta al mirar fuera */
+        if(!iframesCargados[i]){
+          frames[i].src = embedURL(videos[i]);
+          iframesCargados[i] = true;
+        }
+        if(enVR){
+          /* en VR inmersivo no se puede ver el iframe, pero el audio sigue sonando */
+          c.style.display = 'block';
           continue;
         }
         const z = zonasDatos[i];
@@ -2197,22 +2196,20 @@ window.__vid = { camera: camera, curva: curva, ZONAS: ZONAS, zonaIdx: () => zona
         const py = (0.5 - vT.y*0.5)*h;
         const delante = vT.z > -1 && vT.z < 1;
         const intersecta = delante && px + cw*0.5 > 0 && px - cw*0.5 < w && py + ch*0.5 > 0 && py - ch*0.5 < h;
-        const centrada = delante && px > 0 && px < w && py > 0 && py < h;
-        const visible = iframesCargados[i] ? intersecta : centrada;
-        if(!visible){
-          c.style.display = 'none';
-          /* sin tarjeta a la vista no debe seguir sonando YouTube */
-          if(iframesCargados[i]){ frames[i].src = 'about:blank'; iframesCargados[i] = false; }
+        if(!intersecta){
+          /* si la carta sale de la vista, se ve igual como mini-reproductor:
+             el video sigue visible y el audio no se corta */
+          const pw = Math.min(240, w*0.4), ph = pw*0.5625;
+          c.style.display = 'block';
+          c.style.width = pw + 'px';
+          c.querySelector('.pmarco').style.height = ph + 'px';
+          c.style.transform = 'translate(' + (w-14) + 'px,' + (h-14) + 'px) translate(-100%,-100%)';
           continue;
         }
         c.style.display = 'block';
         c.style.width = cw + 'px';
         c.style.transform = 'translate(' + px.toFixed(1) + 'px,' + py.toFixed(1) + 'px) translate(-50%,-50%)';
         c.querySelector('.pmarco').style.height = ch + 'px';
-        if(!iframesCargados[i]){
-          frames[i].src = embedURL(videos[i], !sonidoActivo);
-          iframesCargados[i] = true;
-        }
       }
     }
     if(window.__frameHooks) window.__frameHooks.push(bucle);
